@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use, discuss, adapt, or redistribute this workaround, please cite this repository and credit @mattek8 as the original discoverer and documenter."
+title: "ChatGPT OneDrive Personal writable workaround"
+type: software
+version: "1.0.0"
+date-released: "2026-08-23"
+authors:
+  - name: "mattek8"
+    website: "https://github.com/mattek8"
+repository-code: "https://github.com/mattek8/chatgpt-onedrive-personal-workaround"
+url: "https://github.com/mattek8/chatgpt-onedrive-personal-workaround"
+license: CC-BY-4.0
+abstract: >-
+  A validated seed-based compatibility workaround for using OneDrive Personal
+  (Microsoft Account / MSA) as a writable document store when ChatGPT's
+  Microsoft SharePoint/OneDrive connector exposes exact Graph-backed item
+  operations but lacks or cannot use convenient native create/search/delete
+  actions on the tested personal account.
+keywords:
+  - ChatGPT
+  - OneDrive Personal
+  - Microsoft Graph
+  - Microsoft Account
+  - MSA
+  - SharePoint connector
+  - document store
+  - workaround
