@@ -4,141 +4,171 @@
 >
 > Original seed-based workaround discovered, tested and first documented in August 2026 by **[@mattek8](https://github.com/mattek8)** with ChatGPT (OpenAI).
 
-This repository started as a reproducible workaround for making **OneDrive Personal / Microsoft Account (MSA)** writable from ChatGPT when the Microsoft SharePoint/OneDrive connector exposed only a partial set of useful Graph-backed operations.
+This repository documents the observed behavior of the ChatGPT Microsoft SharePoint/OneDrive connector with **OneDrive Personal / consumer Microsoft Account (MSA)**.
 
-## Current status — 5 September 2026
+It started as a reproducible seed-based workaround when the connector exposed only a partial writable surface. Since 5 September 2026, the tested connector has exposed dedicated personal-drive primitives that make the workaround unnecessary for normal operation. The seed method remains a validated legacy fallback.
 
-**The connector surface changed materially. Native OneDrive Personal operations are now available and were validated end-to-end on the same MSA account used for the original workaround research.**
+## Current status — 16 September 2026
 
-The seed workflow is therefore no longer the preferred path on the currently tested connector. It remains documented as a validated fallback and as a historical record of the August 2026 connector behavior.
+**Native OneDrive Personal operations remain the preferred and validated workflow on the tested connector.**
 
-Observed native OneDrive Personal primitives on 5 September 2026:
+The 5 September baseline validated native personal-drive search/listing, direct folder creation, direct upload, exact writes, move/rename, delete and readback. A 16 September follow-up additionally validated bulk operations, version history/restore and effective permission inspection.
 
-| Operation | Current tested result on MSA | Connector primitive |
+Observed live MSA capability matrix:
+
+| Operation | Current tested result | Connector primitive |
 | --- | --- | --- |
-| Read known file | ✅ | `fetch` |
+| Read known file | ✅, transient retry caveat | `fetch` |
 | List folder children | ✅ | `list_drive_item_children` |
-| Search personal drive files/folders | ✅ | `search_drive_items` |
+| Search personal drive | ✅ | `search_drive_items` |
 | Create folder | ✅ | `create_drive_folder` |
-| Upload new file | ✅ | `upload_drive_item_content` |
-| Upload PDF/binary | ✅ | `upload_drive_item_content` |
-| Replace existing file contents | ✅ | `update_file_exact` |
+| Bulk create folders | ✅ | `create_drive_folders_bulk` |
+| Upload new file / binary | ✅ | `upload_drive_item_content` |
+| Replace existing contents | ✅ | `update_file_exact` |
 | Rename / move | ✅ | `move_drive_item` |
-| Delete file to recycle bin | ✅ | `delete_drive_item` |
-| Delete folder to recycle bin | ✅ | `delete_drive_item` |
+| Bulk rename / move | ✅ | `move_drive_items_bulk` |
+| Delete to recycle bin | ✅ | `delete_drive_item` |
 | Copy file/folder | ✅ | `copy_item` |
+| List version history | ✅ | `list_item_versions` |
+| Restore prior version | ✅ | `restore_item_version` |
+| List effective permissions | ✅ | `list_item_permissions` |
+| Anonymous sharing link | Exposed, not automatically tested | `create_drive_item_link` |
+| Named-recipient invitation | Exposed, not automatically tested | `invite_item_recipients` |
 
-A disposable TXT workflow and an independent PDF workflow were both completed successfully. See [`NATIVE_VALIDATION_2026-09-05.md`](NATIVE_VALIDATION_2026-09-05.md).
+See:
 
-### Important documentation mismatch
+- [`NATIVE_VALIDATION_2026-09-05.md`](NATIVE_VALIDATION_2026-09-05.md) — original native-MSA revalidation;
+- [`NATIVE_VALIDATION_2026-09-16.md`](NATIVE_VALIDATION_2026-09-16.md) — bulk, versioning, permission inspection and transient readback validation.
 
-At the time of this revalidation, OpenAI's public SharePoint help documentation still stated that **Personal OneDrive accounts are not supported by the SharePoint app**. The live connector available to the tested ChatGPT account nevertheless exposed and successfully executed OneDrive-personal-specific create/upload/list/search/move/delete operations.
+## Recommended workflow now
 
-This repository therefore reports **observed connector behavior**, not an official product support guarantee. The capability may be a rollout, compatibility path, or documentation lag and should be re-tested on other accounts and connector versions.
+Use capability-based routing:
+
+1. **Native OneDrive Personal primitives** — preferred when present and working.
+2. **Direct Microsoft Graph / upload session** — use when appropriate, especially in environments with direct Graph access or for specialized large-file workflows.
+3. **Seed-based fallback** — legacy compatibility path only when native personal-drive actions are unavailable or persistently regress.
+4. **Manual intervention** — last resort.
+
+Do not force the seed workaround when a direct personal-drive primitive exists.
+
+### Minimal native create/write/read/delete cycle
+
+1. Create the destination folder with `create_drive_folder`.
+2. Upload with `upload_drive_item_content`.
+3. Keep the returned `drive_id` / `item_id` or canonical item URL.
+4. Verify the write using exact-item readback.
+5. Use `list_drive_item_children` for deterministic immediate folder inspection.
+6. Use `search_drive_items` for discovery, allowing for indexing latency.
+7. Rename/move with `move_drive_item`, or batch known operations with `move_drive_items_bulk`.
+8. Delete with `delete_drive_item` when deletion is explicitly intended.
+
+For important originals and migrations, a successful write response is not equivalent to byte verification. Prefer destination readback plus SHA-256 comparison.
+
+## New native primitives validated on 16 September
+
+### Bulk folder creation
+
+`create_drive_folders_bulk` created two folders in one request on `drive_type: personal`.
+
+The operation is useful for project bootstrap and migration, but it is **not atomic**. Inspect every per-item result before retrying or continuing.
+
+### Bulk move / rename
+
+`move_drive_items_bulk` moved and renamed two files in one request while keeping the same item IDs.
+
+This makes structured reorganizations cheaper in connector round trips, with the same non-atomic caveat.
+
+### Version history / restore
+
+A disposable file was written as 30 bytes, replaced with a 42-byte version, then inspected through `list_item_versions`:
+
+- `2.0` — 42 bytes;
+- `1.0` — 30 bytes.
+
+`restore_item_version(1.0)` returned the item to 30 bytes and produced a new `3.0` version. Subsequent raw readback matched the original source byte-for-byte by SHA-256.
+
+Provider version history can therefore be used as an **additional rollback layer** for mutable document-store items and exports. It does not replace Git history, provenance or explicit persistence verification.
+
+### Permission inspection
+
+`list_item_permissions` successfully returned the effective owner permission for the test item.
+
+This is useful for ACL/sharing audits. Sharing mutations are deliberately not part of automatic validation: anonymous links and named-recipient invitations change access to content and should only be executed under explicit user intent.
+
+## Known transient failure: `serviceReadOnly`
+
+The connector has intermittently returned:
+
+```text
+HTTP 403
+accessDenied
+serviceReadOnly
+Database Is Read Only
+```
+
+on **raw readback**, even while other operations against the same OneDrive Personal account continue to work.
+
+On 16 September the error was reproduced immediately after a successful version restore. A retry a few seconds later against the **same exact item** succeeded, and the returned bytes matched the expected source hash.
+
+Current interpretation: `serviceReadOnly` is a **transient readback/materialization failure mode**, not evidence that the personal drive itself has permanently become read-only.
+
+Recommended handling:
+
+1. keep the exact item reference returned by the write;
+2. if raw fetch returns `serviceReadOnly`, leave verification pending;
+3. retry the same exact-item read after a short delay;
+4. distinguish repeated readback failure from loss of create/upload/move/delete primitives;
+5. only fall back to the seed workflow when a required native primitive is absent or persistently unusable;
+6. mark byte persistence `VERIFIED` only after successful destination readback and hash comparison.
+
+## Search / discovery caveat
+
+`search_drive_items` successfully searches the personal OneDrive and returns canonical IDs for files and folders.
+
+During the 5 September test, a file created only seconds earlier was not immediately returned by text search even though upload, exact fetch and folder listing had succeeded.
+
+Treat drive search as potentially **eventually consistent** for just-created items. Prefer returned item IDs or direct folder listing immediately after a write.
 
 ## What changed from August 2026
 
 ### 23 August 2026
 
-On the tested MSA connection:
-
-- SharePoint-oriented native folder creation failed for MSA;
-- native SharePoint delete was unavailable for the personal drive path;
-- Microsoft Search/general discovery was unavailable or incomplete;
-- exact Graph-backed copy, item resolution, overwrite, rename and move operations did work.
-
-A seed-based compatibility layer was built from those working primitives:
+The tested MSA connector did not yet expose a complete native create/upload/search/delete workflow. A seed compatibility layer was therefore built from available exact Graph-backed operations:
 
 1. copy a folder seed to create a directory;
 2. copy or reuse a one-byte file seed to create a file;
-3. resolve the new item through its Graph path;
+3. resolve the copied item;
 4. overwrite the placeholder with the real bytes;
-5. verify the destination through readback/SHA-256;
+5. verify destination readback/SHA-256;
 6. use `_trash` as a soft-delete fallback.
 
-That method was independently reproduced twice and then used for two real document-store migrations: **13/13 pre-existing files matched byte-for-byte after OneDrive readback**.
+The method was independently reproduced twice and used for two real document-store migrations: **13/13 pre-existing files matched byte-for-byte after OneDrive readback**.
 
-The complete original README is preserved unchanged in [`LEGACY_SEED_WORKAROUND.md`](LEGACY_SEED_WORKAROUND.md), and the August validation record remains in [`VALIDATION.md`](VALIDATION.md).
+The complete original method is preserved in [`LEGACY_SEED_WORKAROUND.md`](LEGACY_SEED_WORKAROUND.md), with its original validation record in [`VALIDATION.md`](VALIDATION.md).
 
 ### 5 September 2026
 
-The same connector family now exposed dedicated personal-drive actions including:
+Dedicated personal-drive search/list/create/upload/move/delete primitives appeared and were exercised successfully end-to-end. Native-first became the documented default.
 
-- `search_drive_items`;
-- `list_drive_item_children`;
-- `create_drive_folder`;
-- `upload_drive_item_content`;
-- `move_drive_item`;
-- `delete_drive_item`.
+### 16 September 2026
 
-These were not merely visible in the connector schema: they were exercised against the connected OneDrive Personal account.
+Bulk folder creation, bulk move/rename, version history/restore and permission inspection were validated on MSA. A transient `serviceReadOnly` raw-read failure was also reproduced and then cleared on retry against the same item.
 
-## Recommended workflow now
+## Document-store implications
 
-Use capability-based routing rather than forcing the workaround:
+For projects using OneDrive as an external document store:
 
-1. **Native OneDrive Personal primitives** — preferred on the current connector.
-2. **Direct Microsoft Graph / upload session** — preferred when available and appropriate, especially for large files.
-3. **Seed-based fallback** — use only if native personal-drive actions are absent, fail, or regress.
-4. **Manual intervention** — last resort.
+- bulk create/move can reduce round trips during bootstrap and migrations;
+- provider versioning can provide rollback for mutable files and generated exports;
+- permission inspection can be used for access audits;
+- sharing changes should remain explicit, user-authorized operations;
+- readback retries should be part of verification before treating `serviceReadOnly` as a persistent regression.
 
-### Minimal native create/write/read/delete cycle
+The architecture remains unchanged: **GitHub/state store for state and provenance; OneDrive for persistent originals/binaries where appropriate.**
 
-1. Create the destination folder with `create_drive_folder`.
-2. Upload the file with `upload_drive_item_content`.
-3. Persist the returned `drive_id` / `item_id` or canonical item URL when useful.
-4. Verify the write with `fetch` or raw download.
-5. Use `list_drive_item_children` for deterministic immediate folder inspection.
-6. Use `search_drive_items` for discovery, allowing for indexing latency.
-7. Rename or move with `move_drive_item`.
-8. Delete with `delete_drive_item` when deletion is explicitly intended.
+## The seed workaround remains useful as fallback
 
-For important persistent originals or migrations, a positive upload response should still not be treated as a substitute for content verification. Prefer destination readback and SHA-256 comparison when raw bytes are available.
-
-## Search / discovery caveat
-
-The new `search_drive_items` primitive successfully searched the personal OneDrive and returned canonical IDs for both files and folders.
-
-However, during the 5 September revalidation, a file created only seconds earlier did **not** immediately appear in text search even though:
-
-- the upload had succeeded;
-- direct `fetch` by returned item ID worked;
-- `list_drive_item_children` showed the file immediately.
-
-Treat OneDrive search as potentially eventually consistent. For just-created content, prefer the IDs returned by the write operation or direct folder listing.
-
-## Native revalidation summary
-
-The 5 September 2026 live test covered two disposable workflows.
-
-### TXT cycle
-
-- native folder creation;
-- native upload of a 104-byte TXT file;
-- immediate folder listing;
-- exact content readback with a unique marker;
-- native rename while preserving the same item ID;
-- native file deletion;
-- verification that the folder was empty;
-- native folder deletion.
-
-### PDF cycle
-
-- native folder creation;
-- native upload of a valid 624-byte `application/pdf` file;
-- readback through the connector with the expected PDF text extracted;
-- native file deletion;
-- native folder deletion.
-
-No seed item was used in either native validation cycle.
-
-See [`NATIVE_VALIDATION_2026-09-05.md`](NATIVE_VALIDATION_2026-09-05.md) for the sanitized evidence record.
-
-## The seed workaround remains useful as a fallback
-
-The workaround is retained because connector capabilities can differ across accounts, plans, rollouts and future versions. If the native personal-drive primitives are missing or stop working, the August 2026 technique is already validated.
-
-Minimal fallback layout:
+The legacy layout remains compatible:
 
 ```text
 OneDrive/
@@ -151,56 +181,61 @@ OneDrive/
         └── exports/
 ```
 
-The legacy method and its edge cases — asynchronous `HTTP 202` copy, temporary `404`, no-op path resolution, copied timestamps and soft-delete — are documented in [`LEGACY_SEED_WORKAROUND.md`](LEGACY_SEED_WORKAROUND.md).
+`seed/` and `_trash/` can be retained harmlessly, but they are no longer required by the normal native path.
+
+The original edge cases — asynchronous `HTTP 202` copy, temporary `404`, copied timestamps, resolver behavior and soft delete — remain documented in [`LEGACY_SEED_WORKAROUND.md`](LEGACY_SEED_WORKAROUND.md).
 
 ## Permissions and security framing
 
 This research does **not** demonstrate a security bypass.
 
-The tested Microsoft consent already granted ChatGPT file access sufficient to read, create, update and delete accessible OneDrive files. The original limitation was in the connector surface exposed to the MSA account, not in an attempt to obtain additional privileges.
+The tested connector operates inside access granted to the connected Microsoft account and remains subject to ChatGPT confirmation controls. Connector confirmation state and Microsoft authorization are separate layers.
 
-The seed workaround and the newer native path both operate within the permissions granted to the connected application and remain subject to ChatGPT confirmation controls where configured.
+Earlier tests observed a ChatGPT "always allow" confirmation choice for connector changes. Native writes remained operational afterwards, but `serviceReadOnly` later recurred on readback, so current evidence does not establish the UI confirmation setting as the cause or cure for that failure.
 
-Never publish:
-
-- personal drive IDs unless necessary;
-- private item IDs or filenames;
-- temporary copy-monitor URLs;
-- URLs containing temporary authentication parameters or tokens.
-
-If an actual security vulnerability is discovered, use the appropriate vendor security-reporting channel rather than publishing exploit details. See [`SECURITY.md`](SECURITY.md).
+Do not publish private drive IDs, personal item IDs, temporary download/upload URLs, account identifiers or tokens.
 
 ## Large files
 
-Different layers have different limits:
+OneDrive storage limits, Graph upload limits and ChatGPT sync/indexing limits are separate concerns.
 
-- OneDrive/SharePoint storage supports much larger files than the one-shot Graph content API.
-- Microsoft Graph one-shot `PUT .../content` supports up to 250 MB per call.
-- Microsoft Graph exposes resumable upload sessions for larger transfers.
-- ChatGPT sync/indexing limits are separate from storage/upload limits.
+The connector contract for `upload_drive_item_content` states that large files reuse upload-session handling, but this repository has **not yet independently stress-tested the size threshold or very-large-file behavior** on MSA.
 
-The original seed workflow was not stress-tested near the one-shot ceiling. The new native `upload_drive_item_content` action states that large files use an upload session automatically, but this repository has **not yet independently stress-tested large-file behavior** on the 5 September connector version.
+For important large files, continue to use post-write readback/hash verification when technically possible.
 
-## Revalidation checklist for another account/version
+## Public documentation mismatch
 
-Before relying on the connector for important data:
+OpenAI's public SharePoint help article was checked again on **16 September 2026**. It still states that **Personal OneDrive accounts are not supported by the SharePoint app**, while documenting live SharePoint actions such as folder creation, file upload/update and sharing-link management for supported environments.
 
-1. confirm the account type is OneDrive Personal / MSA;
+The tested live connector nevertheless continues to expose and execute personal-drive-specific MSA primitives.
+
+This repository therefore reports **observed live connector behavior**, not an official guarantee of OneDrive Personal support for every account, plan or rollout.
+
+Reference: https://help.openai.com/en/articles/12143177
+
+## Revalidation checklist
+
+Before relying on the connector for important data on another account/version:
+
+1. confirm that the connected account is OneDrive Personal / MSA;
 2. create a disposable folder natively;
-3. upload a small disposable file natively;
-4. list the folder and read the file back;
-5. search for the item and note any indexing delay;
-6. rename or move it;
-7. delete the file and folder;
-8. repeat once with a binary/PDF file;
-9. only then treat native MSA support as verified for that environment;
-10. fall back to the seed workflow if the native primitives are unavailable or regress.
+3. upload a small disposable file;
+4. list and read the file back;
+5. test exact overwrite;
+6. test rename/move;
+7. test delete;
+8. optionally test bulk create/move if the workflow will use them;
+9. optionally test version history/restore on disposable content;
+10. treat `serviceReadOnly` as retryable until repeated checks show otherwise;
+11. verify important persistence with destination readback + SHA-256;
+12. use the seed fallback only if native primitives are unavailable or persistently fail.
 
 ## Files in this repository
 
 - [`README.md`](README.md) — current status and recommended workflow.
-- [`NATIVE_VALIDATION_2026-09-05.md`](NATIVE_VALIDATION_2026-09-05.md) — native MSA connector revalidation.
-- [`LEGACY_SEED_WORKAROUND.md`](LEGACY_SEED_WORKAROUND.md) — preserved August 2026 README describing the seed workaround in full.
+- [`NATIVE_VALIDATION_2026-09-05.md`](NATIVE_VALIDATION_2026-09-05.md) — first native MSA connector revalidation.
+- [`NATIVE_VALIDATION_2026-09-16.md`](NATIVE_VALIDATION_2026-09-16.md) — expanded primitive validation and transient readback behavior.
+- [`LEGACY_SEED_WORKAROUND.md`](LEGACY_SEED_WORKAROUND.md) — preserved August seed workaround.
 - [`VALIDATION.md`](VALIDATION.md) — August workaround validation record.
 - [`SECURITY.md`](SECURITY.md) — security-reporting guidance.
 - [`CITATION.cff`](CITATION.cff) — citation metadata.
@@ -216,8 +251,9 @@ If this research, workaround, documentation or validation methodology is reused 
 
 - OpenAI Help Center — SharePoint app and setup in ChatGPT: https://help.openai.com/en/articles/12143177
 - Microsoft Graph — Upload or replace driveItem content: https://learn.microsoft.com/en-us/graph/api/driveitem-put-content
+- Microsoft Graph — driveItem versions: https://learn.microsoft.com/en-us/graph/api/driveitem-list-versions
+- Microsoft Graph — restore driveItem version: https://learn.microsoft.com/en-us/graph/api/driveitemversion-restoreversion
 - Microsoft Graph — createUploadSession: https://learn.microsoft.com/en-us/graph/api/driveitem-createuploadsession
-- Microsoft Support — Restrictions and limitations in OneDrive and SharePoint: https://support.microsoft.com/en-us/onedrive/restrictions-and-limitations-in-onedrive-and-sharepoint
 
 ## License
 
